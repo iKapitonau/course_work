@@ -17,7 +17,12 @@
 #define MEM_TOTAL_POS		0
 #define MEM_AVAILABLE_POS	2
 
+#define DISK_OPCOUNT_POS	8
+#define DISK_IOTIME_POS		9
+
 #define BUF_SIZE		256
+
+static char buf[BUF_SIZE];
 
 static void init(void)
 {
@@ -93,7 +98,6 @@ static uint64_t get_cpu_iowait(void)
 
 static double get_mem_swap(void)
 {
-	static char buf[BUF_SIZE];
 	uint64_t swap_total, swap_free;
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
@@ -112,7 +116,6 @@ static double get_mem_swap(void)
 
 static double get_mem_total(void)
 {
-	static char buf[BUF_SIZE];
 	uint64_t mem_avail, mem_total;
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
@@ -129,16 +132,40 @@ static double get_mem_total(void)
 	return (double)mem_avail / mem_total;
 }
 
-static uint64_t get_disk_ioproc(void)
-{
-}
-
 static uint64_t get_disk_opcount(void)
 {
+	uint64_t tmp, opcount = 0;
+
+	FILE *f_disk = fopen("/proc/diskstats", "r");
+	
+	do {
+		fscanf(f_disk, "%"SCNu64"%"SCNu64"%s", &tmp, &tmp, buf);
+		for (size_t i = 0; i < DISK_OPCOUNT_POS + 1; ++i)
+			fscanf(f_disk, "%"SCNu64, &tmp);	
+		opcount += tmp;
+	} while (fgets(buf, BUF_SIZE, f_disk));
+	
+	fclose(f_disk);
+	
+	return opcount;
 }
 
-static uint64_t get_disk_iowait(void)
+static uint64_t get_disk_iotime(void)
 {
+	uint64_t tmp, iotime = 0;
+
+	FILE *f_disk = fopen("/proc/diskstats", "r");
+	
+	do {
+		fscanf(f_disk, "%"SCNu64"%"SCNu64"%s", &tmp, &tmp, buf);
+		for (size_t i = 0; i < DISK_IOTIME_POS + 1; ++i)
+			fscanf(f_disk, "%"SCNu64, &tmp);	
+		iotime += tmp;
+	} while (fgets(buf, BUF_SIZE, f_disk));
+	
+	fclose(f_disk);
+	
+	return iotime;
 }
 
 static void term(void)
@@ -152,6 +179,8 @@ void main(void)
 
 	get_mem_swap();
 	while (1) {
+		syslog(LOG_DEBUG, "%"PRIu64, get_disk_opcount());
+		syslog(LOG_DEBUG, "%"PRIu64, get_disk_iotime());
 		syslog(LOG_DEBUG, "%lf\n", get_cpu_stat());
 		syslog(LOG_DEBUG, "%"PRIu64, get_cpu_iowait());
 		sleep(DELAY_S);
