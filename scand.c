@@ -3,6 +3,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -12,6 +13,7 @@
 #define STAT_IOWAIT_POS		4
 #define STAT_IDLE_POS		3
 
+#define MEM_ENTRIES_NUMBER	53
 #define MEM_SWAPTOTAL_POS	14
 #define MEM_SWAPFREE_POS	15
 #define MEM_TOTAL_POS		0
@@ -48,12 +50,8 @@ static void init(void)
 	close(STDIN_FILENO);
 }
 
-static double get_cpu_stat(void)
+uint64_t get_cpu_useful(void)
 {
-	static uint64_t prev_cpu_times[STAT_ENTRIES_NUMBER];
-	static uint64_t cpu_times[STAT_ENTRIES_NUMBER];
-	static uint64_t prev_sum;
-
 	uint64_t sum = 0;
 
 	FILE *f_stat = fopen("/proc/stat", "r");
@@ -62,24 +60,35 @@ static double get_cpu_stat(void)
 	fseek(f_stat, 4, SEEK_SET);
 
 	for (size_t i = 0; i < STAT_ENTRIES_NUMBER; ++i) {
-		fscanf(f_stat, "%"SCNu64, &cpu_times[i]); 
-		sum += cpu_times[i];
+		uint64_t cpu_time;
+		fscanf(f_stat, "%"SCNu64, &cpu_time); 
+		if (i != 3 && i != 4)
+			sum += cpu_time;
 	}
-
-	uint64_t diff_sum = sum - prev_sum;
-	uint64_t diff_idle = (cpu_times[STAT_IDLE_POS] + cpu_times[STAT_IOWAIT_POS])
-			- (prev_cpu_times[STAT_IDLE_POS] + prev_cpu_times[STAT_IOWAIT_POS]);
-
-	prev_sum = sum;
-	for (size_t i = 0; i < STAT_ENTRIES_NUMBER; ++i)
-		prev_cpu_times[i] = cpu_times[i];
 
 	fclose(f_stat);
 
-	return (double)(diff_sum - diff_idle) / diff_sum * 100;
+	return sum;
 }
 
-static uint64_t get_cpu_iowait(void)
+uint64_t get_cpu_idle(void)
+{
+	uint64_t idle_time;
+
+	FILE *f_stat = fopen("/proc/stat", "r");
+
+	// skip 'cpu ' in /proc/stat
+	fseek(f_stat, 4, SEEK_SET);
+
+	for (size_t i = 0; i < STAT_IDLE_POS + 1; ++i)
+		fscanf(f_stat, "%"SCNu64, &idle_time); 
+
+	fclose(f_stat);
+
+	return idle_time;
+}
+
+uint64_t get_cpu_iowait(void)
 {
 	uint64_t iowait_time;
 
@@ -96,43 +105,61 @@ static uint64_t get_cpu_iowait(void)
 	return iowait_time;
 }
 
-static double get_mem_swap(void)
+double get_mem_swap(void)
 {
 	uint64_t swap_total, swap_free;
+	char localbuf[BUF_SIZE];
+	int cnt = 0;
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
 
-	// skip unnecessary lines	
-	for (size_t i = 0; i < MEM_SWAPTOTAL_POS; ++i)
+	for (size_t i = 0; i < MEM_ENTRIES_NUMBER; ++i) {
 		fgets(buf, BUF_SIZE, f_mem);
-
-	fscanf(f_mem, "%s%"SCNu64"%s", buf, &swap_total, buf);
-	fscanf(f_mem, "%s%"SCNu64"%s", buf, &swap_free, buf);
+		if (strstr(buf, "SwapTotal") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &swap_total, localbuf);
+			++cnt;
+		}
+		if (strstr(buf, "SwapFree") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &swap_free, localbuf);
+			++cnt;
+		}
+		if (cnt == 2)
+			break;
+	}
 
 	fclose(f_mem);
 	
 	return (double)swap_free / swap_total;
 }
 
-static double get_mem_total(void)
+double get_mem_ram(void)
 {
 	uint64_t mem_avail, mem_total;
+	char localbuf[BUF_SIZE];
+	int cnt = 0;
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
 
-	fscanf(f_mem, "%s%"SCNu64"%s", buf, &mem_total, buf);
-
-	// skip unnecessary lines	
-	fgets(buf, BUF_SIZE, f_mem);
-
-	fscanf(f_mem, "%s%"SCNu64"%s", buf, &mem_avail, buf);
+	for (size_t i = 0; i < MEM_ENTRIES_NUMBER; ++i) {
+		fgets(buf, BUF_SIZE, f_mem);
+		if (strstr(buf, "MemTotal") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &mem_total, localbuf);
+			++cnt;
+		}
+		if (strstr(buf, "MemAvailable") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &mem_avail, localbuf);
+			++cnt;
+		}
+		if (cnt == 2)
+			break;
+	}
 
 	fclose(f_mem);
 	
 	return (double)mem_avail / mem_total;
 }
 
-static uint64_t get_disk_opcount(void)
+uint64_t get_disk_opcount(void)
 {
 	uint64_t tmp, opcount = 0;
 
@@ -150,7 +177,7 @@ static uint64_t get_disk_opcount(void)
 	return opcount;
 }
 
-static uint64_t get_disk_iotime(void)
+uint64_t get_disk_iotime(void)
 {
 	uint64_t tmp, iotime = 0;
 
@@ -179,10 +206,8 @@ void main(void)
 
 	get_mem_swap();
 	while (1) {
-		syslog(LOG_DEBUG, "%"PRIu64, get_disk_opcount());
-		syslog(LOG_DEBUG, "%"PRIu64, get_disk_iotime());
-		syslog(LOG_DEBUG, "%lf\n", get_cpu_stat());
-		syslog(LOG_DEBUG, "%"PRIu64, get_cpu_iowait());
+		syslog(LOG_DEBUG, "%lf\n", get_mem_swap());
+		syslog(LOG_DEBUG, "%lf\n", get_mem_ram());
 		sleep(DELAY_S);
 	}
 
