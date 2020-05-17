@@ -26,30 +26,6 @@
 
 static char buf[BUF_SIZE];
 
-static void init(void)
-{
-	pid_t pid = fork();
-
-	if (pid < 0) 
-		exit(EXIT_FAILURE);
-
-	if (pid > 0)
-		exit(EXIT_SUCCESS);
-
-	umask(0);
-
-	openlog("scand", LOG_PID | LOG_CONS, LOG_DAEMON);
-
-	pid_t sid = setsid();
-
-	if (chdir("/") < 0)
-		exit(EXIT_FAILURE);
-
-	close(STDERR_FILENO);
-	close(STDOUT_FILENO);
-	close(STDIN_FILENO);
-}
-
 uint64_t get_cpu_useful(void)
 {
 	uint64_t sum = 0;
@@ -105,11 +81,10 @@ uint64_t get_cpu_iowait(void)
 	return iowait_time;
 }
 
-double get_mem_swap(void)
+uint64_t get_mem_swap_total(void)
 {
-	uint64_t swap_total, swap_free;
+	uint64_t swap_total;
 	char localbuf[BUF_SIZE];
-	int cnt = 0;
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
 
@@ -117,26 +92,39 @@ double get_mem_swap(void)
 		fgets(buf, BUF_SIZE, f_mem);
 		if (strstr(buf, "SwapTotal") != NULL) {
 			sscanf(buf, "%s%"SCNu64"%s", localbuf, &swap_total, localbuf);
-			++cnt;
-		}
-		if (strstr(buf, "SwapFree") != NULL) {
-			sscanf(buf, "%s%"SCNu64"%s", localbuf, &swap_free, localbuf);
-			++cnt;
-		}
-		if (cnt == 2)
 			break;
+		}
 	}
 
 	fclose(f_mem);
 	
-	return (double)swap_free / swap_total;
+	return swap_total;
 }
 
-double get_mem_ram(void)
+uint64_t get_mem_swap_free(void)
 {
-	uint64_t mem_avail, mem_total;
+	uint64_t swap_free;
 	char localbuf[BUF_SIZE];
-	int cnt = 0;
+
+	FILE *f_mem = fopen("/proc/meminfo", "r");
+
+	for (size_t i = 0; i < MEM_ENTRIES_NUMBER; ++i) {
+		fgets(buf, BUF_SIZE, f_mem);
+		if (strstr(buf, "SwapFree") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &swap_free, localbuf);
+			break;
+		}
+	}
+
+	fclose(f_mem);
+	
+	return swap_free;
+}
+
+uint64_t get_mem_ram_total(void)
+{
+	uint64_t mem_total;
+	char localbuf[BUF_SIZE];
 
 	FILE *f_mem = fopen("/proc/meminfo", "r");
 
@@ -144,19 +132,33 @@ double get_mem_ram(void)
 		fgets(buf, BUF_SIZE, f_mem);
 		if (strstr(buf, "MemTotal") != NULL) {
 			sscanf(buf, "%s%"SCNu64"%s", localbuf, &mem_total, localbuf);
-			++cnt;
-		}
-		if (strstr(buf, "MemAvailable") != NULL) {
-			sscanf(buf, "%s%"SCNu64"%s", localbuf, &mem_avail, localbuf);
-			++cnt;
-		}
-		if (cnt == 2)
 			break;
+		}
 	}
 
 	fclose(f_mem);
 	
-	return (double)mem_avail / mem_total;
+	return mem_total;
+}
+
+uint64_t get_mem_ram_free(void)
+{
+	uint64_t mem_avail;
+	char localbuf[BUF_SIZE];
+
+	FILE *f_mem = fopen("/proc/meminfo", "r");
+
+	for (size_t i = 0; i < MEM_ENTRIES_NUMBER; ++i) {
+		fgets(buf, BUF_SIZE, f_mem);
+		if (strstr(buf, "MemAvailable") != NULL) {
+			sscanf(buf, "%s%"SCNu64"%s", localbuf, &mem_avail, localbuf);
+			break;
+		}
+	}
+
+	fclose(f_mem);
+	
+	return mem_avail;
 }
 
 uint64_t get_disk_opcount(void)
@@ -195,21 +197,6 @@ uint64_t get_disk_iotime(void)
 	return iotime;
 }
 
-static void term(void)
-{
-	closelog();
-}
-
 void main(void)
 {
-	init();
-
-	get_mem_swap();
-	while (1) {
-		syslog(LOG_DEBUG, "%lf\n", get_mem_swap());
-		syslog(LOG_DEBUG, "%lf\n", get_mem_ram());
-		sleep(DELAY_S);
-	}
-
-	term();
 }
